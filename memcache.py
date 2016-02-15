@@ -914,7 +914,8 @@ class Client(threading.local):
 
         @rtype: list
         '''
-        mapping = {k: self._encode_value(val, tags) for k, v in mapping.items()}
+        for k in mapping:
+            mapping[k] = self._encode_value(mapping[k], tags)
         self._statlog('set_multi')
 
         server_keys, prefixed_to_orig_key = self._map_and_prefix_keys(
@@ -1245,8 +1246,12 @@ class Client(threading.local):
                 if isinstance(msg, tuple):
                     msg = msg[1]
                 server.mark_dead(msg)
-        retvals = {k: self._decode_value(v) for k, v in retvals.items()}
-        retvals = {k: v for k, v in retvals.items() if v is not None}
+        result = {}
+        for k in retvals:
+            v = self._decode_value(retvals[k])
+            if not v:
+                continue
+            result[k] = v
         return retvals
 
     def _expect_cas_value(self, server, line=None, raise_exception=False):
