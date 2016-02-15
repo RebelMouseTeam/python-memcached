@@ -1080,7 +1080,7 @@ class Client(threading.local):
                 server.mark_dead(msg)
             return 0
 
-    def tag_delete(self, tag):
+    def delete_by_tag(self, tag):
         return self.set('{}{}'.format(TAGS_KEY_PREFIX, tag), int(time.time()))
 
     def _get(self, cmd, key):
