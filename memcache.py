@@ -320,7 +320,6 @@ class Client(threading.local):
         else:
             return val
 
-
     def reset_cas(self):
         """Reset the cas cache.
 
@@ -671,7 +670,7 @@ class Client(threading.local):
             server.mark_dead(msg)
             return None
 
-    def add(self, key, val, time=0, min_compress_len=0, noreply=False):
+    def add(self, key, val, time=0, min_compress_len=0, noreply=False, tags=None):
         '''Add new key with value.
 
         Like L{set}, but only stores in memcache if the key doesn't
@@ -680,6 +679,7 @@ class Client(threading.local):
         @return: Nonzero on success.
         @rtype: int
         '''
+        val = self._encode_value(val, tags)
         return self._set("add", key, val, time, min_compress_len, noreply)
 
     def append(self, key, val, time=0, min_compress_len=0, noreply=False):
@@ -704,7 +704,7 @@ class Client(threading.local):
         '''
         return self._set("prepend", key, val, time, min_compress_len, noreply)
 
-    def replace(self, key, val, time=0, min_compress_len=0, noreply=False):
+    def replace(self, key, val, time=0, min_compress_len=0, noreply=False, tags=None):
         '''Replace existing key with value.
 
         Like L{set}, but only stores in memcache if the key already exists.
@@ -713,6 +713,7 @@ class Client(threading.local):
         @return: Nonzero on success.
         @rtype: int
         '''
+        val = self._encode_value(val, tags)
         return self._set("replace", key, val, time, min_compress_len, noreply)
 
     def set(self, key, val, time=0, min_compress_len=0, noreply=False, tags=None):
@@ -1143,7 +1144,6 @@ class Client(threading.local):
         '''
         val = self._get('get', key)
         return self._decode_value(val)
-
 
     def gets(self, key):
         '''Retrieves a key from the memcache. Used in conjunction with 'cas'.
