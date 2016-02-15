@@ -177,6 +177,25 @@ class TestMemcache(unittest.TestCase):
         ret = self.mc.delete_multi({'keyhere': 'a', 'keythere': 'b'})
         self.assertEqual(ret, 1)
 
+    def test_tags_set(self):
+        self.mc.disconnect_all()
+        self.mc.set('key', 'val', tags=['t1'])
+        self.mc.set('key1', 'val2', tags=['t2'])
+        self.mc.delete_by_tag('t1')
+        self.assertIsNone(self.mc.get('key'))
+        self.assertEqual(self.mc.get('key1'), 'val2')
+
+    def test_tags_set_multi(self):
+        self.mc.disconnect_all()
+        mapping = {
+            'k': 1,
+            'k2': 2,
+        }
+        self.mc.set_multi(mapping, tags=['t1'])
+        self.mc.delete_by_tag('t1')
+        self.assertIsNone(self.mc.get('k'))
+        self.assertIsNone(self.mc.get('k1'))
+
 
 if __name__ == '__main__':
     unittest.main()
