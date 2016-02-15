@@ -293,7 +293,7 @@ class Client(threading.local):
         }))
 
     def _decode_value(self, data):
-        if not dats:
+        if not data:
             return data
 
         if not data.startswith(TAGS_PREFIX):
