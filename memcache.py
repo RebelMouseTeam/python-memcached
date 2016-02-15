@@ -855,7 +855,7 @@ class Client(threading.local):
         return (server_keys, prefixed_to_orig_key)
 
     def set_multi(self, mapping, time=0, key_prefix='', min_compress_len=0,
-                  noreply=False):
+                  noreply=False, tags=None):
         '''Sets multiple keys in the memcache doing just one query.
 
         >>> notset_keys = mc.set_multi({'key1' : 'val1', 'key2' : 'val2'})
@@ -915,6 +915,7 @@ class Client(threading.local):
 
         @rtype: list
         '''
+        mapping = {k: self._encode_value(val, tags) for k, v in mapping.items()}
         self._statlog('set_multi')
 
         server_keys, prefixed_to_orig_key = self._map_and_prefix_keys(
