@@ -288,7 +288,7 @@ class Client(threading.local):
         tags = [str(t) for t in tags]
         return '{}{}'.format(TAGS_PREFIX, pickle.dumps({
             TAGS_TAG_KEY: tags,
-            TAGS_VALUE_KEY: value,
+            TAGS_VALUE_KEY: val,
             TAGS_CREATED_AT_KEY: int(time.time()),
         }))
 
