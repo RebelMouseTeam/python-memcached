@@ -751,7 +751,7 @@ class Client(threading.local):
         val = self._encode_value(val, tags)
         return self._set("set", key, val, time, min_compress_len, noreply)
 
-    def cas(self, key, val, time=0, min_compress_len=0, noreply=False, tags=None):
+    def cas(self, key, val, time=0, min_compress_len=0, noreply=False):
         '''Check and set (CAS)
 
         Sets a key to a given value in the memcache if it hasn't been
@@ -786,7 +786,6 @@ class Client(threading.local):
         @param noreply: optional parameter instructs the server to not
         send the reply.
         '''
-        val = self._encode_value(val, tags)
         return self._set("cas", key, val, time, min_compress_len, noreply)
 
     def _map_and_prefix_keys(self, key_iterable, key_prefix):
