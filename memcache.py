@@ -287,8 +287,8 @@ class Client(threading.local):
 
         tags = [str(t) for t in tags]
         return '{}{}'.format(TAGS_PREFIX, pickle.dumps({
-            TAGS_TAG_KEY: val,
-            TAGS_VALUE_KEY: tags,
+            TAGS_TAG_KEY: tags,
+            TAGS_VALUE_KEY: value,
             TAGS_CREATED_AT_KEY: int(time.time()),
         }))
 
@@ -306,8 +306,8 @@ class Client(threading.local):
 
         try:
             tags = struct[TAGS_TAG_KEY]
-            created_at = struct[TAGS_CREATED_AT_KEY]
             val = struct[TAGS_VALUE_KEY]
+            created_at = struct[TAGS_CREATED_AT_KEY]
         except KeyError:
             return data
 
