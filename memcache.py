@@ -691,7 +691,7 @@ class Client(threading.local):
         @return: Nonzero on success.
         @rtype: int
         '''
-        return self._set("append", key, val, time, min_compress_len, noreply)
+        raise NotImplementedError
 
     def prepend(self, key, val, time=0, min_compress_len=0, noreply=False):
         '''Prepend the value to the beginning of the existing key's value.
@@ -702,7 +702,7 @@ class Client(threading.local):
         @return: Nonzero on success.
         @rtype: int
         '''
-        return self._set("prepend", key, val, time, min_compress_len, noreply)
+        raise NotImplementedError
 
     def replace(self, key, val, time=0, min_compress_len=0, noreply=False, tags=None):
         '''Replace existing key with value.
