@@ -102,6 +102,12 @@ SERVER_MAX_KEY_LENGTH = 250
 # module.
 SERVER_MAX_VALUE_LENGTH = 1024 * 1024
 
+TAGS_PREFIX = 'T!'
+TAGS_KEY_PREFIX = 't!'
+TAGS_TAG_KEY = 't'
+TAGS_VALUE_KEY = 'v'
+TAGS_CREATED_AT_KEY = 'c'
+
 
 class _Error(Exception):
     pass
@@ -274,6 +280,46 @@ class Client(threading.local):
             fullcmd.append(b' ')
             fullcmd.extend(args)
         return b''.join(fullcmd)
+
+    def _encode_value(self, val, tags):
+        if not tags:
+            return val
+
+        tags = [str(t) for t in tags]
+        return '{}{}'.format(TAGS_PREFIX, pickle.dumps({
+            TAGS_TAG_KEY: val,
+            TAGS_VALUE_KEY: tags,
+            TAGS_CREATED_AT_KEY: int(time.time()),
+        }))
+
+    def _decode_value(self, data):
+        if not dats:
+            return data
+
+        if not data.startswith(TAGS_PREFIX):
+            return data
+
+        try:
+            struct = pickle.loads(data[len(TAGS_PREFIX):])
+        except Exception:
+            return data
+
+        try:
+            tags = struct[TAGS_TAG_KEY]
+            created_at = struct[TAGS_CREATED_AT_KEY]
+            val = struct[TAGS_VALUE_KEY]
+        except KeyError:
+            return data
+
+        tags = self.get_multi(['{}{}'.format(TAGS_KEY_PREFIX, t) for t in tags])
+        if not tags:
+            return val
+
+        if max(int(t) for t in tags.values()) >= created_at:
+            return
+        else:
+            return val
+
 
     def reset_cas(self):
         """Reset the cas cache.
@@ -669,7 +715,7 @@ class Client(threading.local):
         '''
         return self._set("replace", key, val, time, min_compress_len, noreply)
 
-    def set(self, key, val, time=0, min_compress_len=0, noreply=False):
+    def set(self, key, val, time=0, min_compress_len=0, noreply=False, tags=None):
         '''Unconditionally sets a key to a given value in the memcache.
 
         The C{key} can optionally be an tuple, with the first element
@@ -701,9 +747,10 @@ class Client(threading.local):
         @param noreply: optional parameter instructs the server to not
         send the reply.
         '''
+        val = self._encode_value(val, tags)
         return self._set("set", key, val, time, min_compress_len, noreply)
 
-    def cas(self, key, val, time=0, min_compress_len=0, noreply=False):
+    def cas(self, key, val, time=0, min_compress_len=0, noreply=False, tags=None):
         '''Check and set (CAS)
 
         Sets a key to a given value in the memcache if it hasn't been
@@ -738,6 +785,7 @@ class Client(threading.local):
         @param noreply: optional parameter instructs the server to not
         send the reply.
         '''
+        val = self._encode_value(val, tags)
         return self._set("cas", key, val, time, min_compress_len, noreply)
 
     def _map_and_prefix_keys(self, key_iterable, key_prefix):
@@ -1031,36 +1079,8 @@ class Client(threading.local):
                 server.mark_dead(msg)
             return 0
 
-    def tag_add(self, tag, key):
-        self.check_key(tag)
-        self.check_key(key)
-        server, tag = self._get_server(tag)
-        if not server:
-            return False
-        self._statlog('tag_add')
-
-        try:
-            server.send_cmd("tag_add %s %s" % (tag, key))
-            return(server.expect("TAG_STORED") == "TAG_STORED")
-        except (_Error, socket.error), msg:
-            if isinstance(msg, tuple): msg = msg[1]
-            server.mark_dead(msg)
-            return False
-
     def tag_delete(self, tag):
-        self.check_key(tag)
-        server, tag = self._get_server(tag)
-        if not server:
-            return False
-        self._statlog('tag_delete')
-
-        try:
-            server.send_cmd("tag_delete %s" % (tag,))
-            return(server.expect("TAG_DELETED") == "TAG_DELETED")
-        except (_Error, socket.error), msg:
-            if isinstance(msg, tuple): msg = msg[1]
-            server.mark_dead(msg)
-            return False
+        return self.set('{}{}'.format(TAGS_KEY_PREFIX, tag), int(time.time()))
 
     def _get(self, cmd, key):
         key = self._encode_key(key)
@@ -1121,14 +1141,17 @@ class Client(threading.local):
 
         @return: The value or None.
         '''
-        return self._get('get', key)
+        val = self._get('get', key)
+        return self._decode_value(val)
+
 
     def gets(self, key):
         '''Retrieves a key from the memcache. Used in conjunction with 'cas'.
 
         @return: The value or None.
         '''
-        return self._get('gets', key)
+        val = self._get('gets', key)
+        return self._decode_value(val)
 
     def get_multi(self, keys, key_prefix=''):
         '''Retrieves multiple keys from the memcache doing just one query.
