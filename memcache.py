@@ -1246,6 +1246,8 @@ class Client(threading.local):
                 if isinstance(msg, tuple):
                     msg = msg[1]
                 server.mark_dead(msg)
+        retvals = {k: self._decode_value(v) for k, v in retvals.items()}
+        retvals = {k: v for k, v in retvals.items() if v is not None}
         return retvals
 
     def _expect_cas_value(self, server, line=None, raise_exception=False):
