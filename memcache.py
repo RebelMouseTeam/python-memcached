@@ -296,7 +296,7 @@ class Client(threading.local):
         if not data:
             return data
 
-        if not data.startswith(TAGS_PREFIX):
+        if not str(data).startswith(TAGS_PREFIX):
             return data
 
         try:
