@@ -281,6 +281,11 @@ class Client(threading.local):
             fullcmd.extend(args)
         return b''.join(fullcmd)
 
+    @staticmethod
+    def _get_current_ts():
+        s, ms = repr(time.time()).split('.')
+        return int(''.join([s, ms[:4]]))
+
     def _encode_value(self, val, tags):
         if not tags:
             return val
@@ -289,7 +294,7 @@ class Client(threading.local):
         return '{}{}'.format(TAGS_PREFIX, pickle.dumps({
             TAGS_TAG_KEY: tags,
             TAGS_VALUE_KEY: val,
-            TAGS_CREATED_AT_KEY: int(time.time()),
+            TAGS_CREATED_AT_KEY: self._get_current_ts(),
         }))
 
     def _decode_value(self, data):
@@ -1082,7 +1087,7 @@ class Client(threading.local):
             return 0
 
     def delete_by_tag(self, tag):
-        return self.set('{}{}'.format(TAGS_KEY_PREFIX, tag), int(time.time()))
+        return self.set('{}{}'.format(TAGS_KEY_PREFIX, tag), self._get_current_ts())
 
     def _get(self, cmd, key):
         key = self._encode_key(key)
