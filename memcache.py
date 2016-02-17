@@ -49,7 +49,6 @@ from __future__ import print_function
 
 import binascii
 import os
-import pickle
 import re
 import socket
 import sys
@@ -59,6 +58,10 @@ import zlib
 
 import six
 
+try:
+    import cPickle as pickle
+except ImportError:
+    import pickle
 
 def cmemcache_hash(key):
     return (
