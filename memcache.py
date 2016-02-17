@@ -102,6 +102,12 @@ SERVER_MAX_KEY_LENGTH = 250
 # module.
 SERVER_MAX_VALUE_LENGTH = 1024 * 1024
 
+TAGS_PREFIX = 'T!'
+TAGS_KEY_PREFIX = 't!'
+TAGS_TAG_KEY = 't'
+TAGS_VALUE_KEY = 'v'
+TAGS_CREATED_AT_KEY = 'c'
+
 
 class _Error(Exception):
     pass
@@ -274,6 +280,50 @@ class Client(threading.local):
             fullcmd.append(b' ')
             fullcmd.extend(args)
         return b''.join(fullcmd)
+
+    @staticmethod
+    def _get_current_ts():
+        s, ms = repr(time.time()).split('.')
+        return int(''.join([s, ms[:4]]))
+
+    def _encode_value(self, val, tags):
+        if not tags:
+            return val
+
+        tags = [str(t) for t in tags]
+        return '{}{}'.format(TAGS_PREFIX, pickle.dumps({
+            TAGS_TAG_KEY: tags,
+            TAGS_VALUE_KEY: val,
+            TAGS_CREATED_AT_KEY: self._get_current_ts(),
+        }))
+
+    def _decode_value(self, data):
+        if not data:
+            return data
+
+        if not str(data).startswith(TAGS_PREFIX):
+            return data
+
+        try:
+            struct = pickle.loads(data[len(TAGS_PREFIX):])
+        except Exception:
+            return data
+
+        try:
+            tags = struct[TAGS_TAG_KEY]
+            val = struct[TAGS_VALUE_KEY]
+            created_at = struct[TAGS_CREATED_AT_KEY]
+        except KeyError:
+            return data
+
+        tags = self.get_multi(['{}{}'.format(TAGS_KEY_PREFIX, t) for t in tags])
+        if not tags:
+            return val
+
+        if max(int(t) for t in tags.values()) >= created_at:
+            return
+        else:
+            return val
 
     def reset_cas(self):
         """Reset the cas cache.
@@ -625,7 +675,7 @@ class Client(threading.local):
             server.mark_dead(msg)
             return None
 
-    def add(self, key, val, time=0, min_compress_len=0, noreply=False):
+    def add(self, key, val, time=0, min_compress_len=0, noreply=False, tags=None):
         '''Add new key with value.
 
         Like L{set}, but only stores in memcache if the key doesn't
@@ -634,6 +684,7 @@ class Client(threading.local):
         @return: Nonzero on success.
         @rtype: int
         '''
+        val = self._encode_value(val, tags)
         return self._set("add", key, val, time, min_compress_len, noreply)
 
     def append(self, key, val, time=0, min_compress_len=0, noreply=False):
@@ -645,7 +696,7 @@ class Client(threading.local):
         @return: Nonzero on success.
         @rtype: int
         '''
-        return self._set("append", key, val, time, min_compress_len, noreply)
+        raise NotImplementedError
 
     def prepend(self, key, val, time=0, min_compress_len=0, noreply=False):
         '''Prepend the value to the beginning of the existing key's value.
@@ -656,9 +707,9 @@ class Client(threading.local):
         @return: Nonzero on success.
         @rtype: int
         '''
-        return self._set("prepend", key, val, time, min_compress_len, noreply)
+        raise NotImplementedError
 
-    def replace(self, key, val, time=0, min_compress_len=0, noreply=False):
+    def replace(self, key, val, time=0, min_compress_len=0, noreply=False, tags=None):
         '''Replace existing key with value.
 
         Like L{set}, but only stores in memcache if the key already exists.
@@ -667,9 +718,10 @@ class Client(threading.local):
         @return: Nonzero on success.
         @rtype: int
         '''
+        val = self._encode_value(val, tags)
         return self._set("replace", key, val, time, min_compress_len, noreply)
 
-    def set(self, key, val, time=0, min_compress_len=0, noreply=False):
+    def set(self, key, val, time=0, min_compress_len=0, noreply=False, tags=None):
         '''Unconditionally sets a key to a given value in the memcache.
 
         The C{key} can optionally be an tuple, with the first element
@@ -701,6 +753,7 @@ class Client(threading.local):
         @param noreply: optional parameter instructs the server to not
         send the reply.
         '''
+        val = self._encode_value(val, tags)
         return self._set("set", key, val, time, min_compress_len, noreply)
 
     def cas(self, key, val, time=0, min_compress_len=0, noreply=False):
@@ -806,7 +859,7 @@ class Client(threading.local):
         return (server_keys, prefixed_to_orig_key)
 
     def set_multi(self, mapping, time=0, key_prefix='', min_compress_len=0,
-                  noreply=False):
+                  noreply=False, tags=None):
         '''Sets multiple keys in the memcache doing just one query.
 
         >>> notset_keys = mc.set_multi({'key1' : 'val1', 'key2' : 'val2'})
@@ -866,6 +919,8 @@ class Client(threading.local):
 
         @rtype: list
         '''
+        for k in mapping:
+            mapping[k] = self._encode_value(mapping[k], tags)
         self._statlog('set_multi')
 
         server_keys, prefixed_to_orig_key = self._map_and_prefix_keys(
@@ -1031,6 +1086,9 @@ class Client(threading.local):
                 server.mark_dead(msg)
             return 0
 
+    def delete_by_tag(self, tag):
+        return self.set('{}{}'.format(TAGS_KEY_PREFIX, tag), self._get_current_ts())
+
     def _get(self, cmd, key):
         key = self._encode_key(key)
         if self.do_check_key:
@@ -1090,14 +1148,16 @@ class Client(threading.local):
 
         @return: The value or None.
         '''
-        return self._get('get', key)
+        val = self._get('get', key)
+        return self._decode_value(val)
 
     def gets(self, key):
         '''Retrieves a key from the memcache. Used in conjunction with 'cas'.
 
         @return: The value or None.
         '''
-        return self._get('gets', key)
+        val = self._get('gets', key)
+        return self._decode_value(val)
 
     def get_multi(self, keys, key_prefix=''):
         '''Retrieves multiple keys from the memcache doing just one query.
@@ -1191,6 +1251,12 @@ class Client(threading.local):
                 if isinstance(msg, tuple):
                     msg = msg[1]
                 server.mark_dead(msg)
+        result = {}
+        for k in retvals:
+            v = self._decode_value(retvals[k])
+            if not v:
+                continue
+            result[k] = v
         return retvals
 
     def _expect_cas_value(self, server, line=None, raise_exception=False):
