@@ -19,7 +19,6 @@ if [ -f /tmp/python-memcached-"$VERSION".tar.gz ]; then
 	exit 1
 fi
 
-sed -ri 's/^(\s*version=).*$/\1"'"$VERSION"'",/' setup.py
 sed -ri 's/^(\s*__version__\s*=\s*).*$/\1"'"$VERSION"'"/' memcache.py
 sed -ri 's/^(\sVersion:\s*).*$/\1"'"$VERSION"'"/' PKG-INFO
 
@@ -30,4 +29,5 @@ git push --tags
 cd /tmp
 release "$VERSION" python-memcached
 cd python-memcached-"$VERSION"
-python setup.py sdist bdist_wheel upload
+python setup.py sdist bdist_wheel
+twine upload -r pypitest dist/*"$VERSION"* && twine upload -r pypi dist/*"$VERSION"*
