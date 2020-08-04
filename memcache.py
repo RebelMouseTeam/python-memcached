@@ -48,7 +48,7 @@ More detailed documentation is available in the L{Client} class.
 from __future__ import print_function
 
 import binascii
-import os
+from io import BytesIO
 import re
 import socket
 import sys
@@ -58,15 +58,15 @@ import zlib
 
 import six
 
-try:
+if six.PY2:
+    # With Python 2, the faster C implementation has to be imported explicitly.
     import cPickle as pickle
-except ImportError:
+else:
     import pickle
 
+
 def cmemcache_hash(key):
-    return (
-        (((binascii.crc32(key) & 0xffffffff)
-          >> 16) & 0x7fff) or 1)
+    return (((binascii.crc32(key) & 0xffffffff) >> 16) & 0x7fff) or 1
 serverHashFunction = cmemcache_hash
 
 
@@ -75,25 +75,13 @@ def useOldServerHashFunction():
     global serverHashFunction
     serverHashFunction = binascii.crc32
 
-from io import BytesIO
-if six.PY2:
-    try:
-        unicode
-    except NameError:
-        _has_unicode = False
-    else:
-        _has_unicode = True
-else:
-    _has_unicode = True
-
-_str_cls = six.string_types
 
 valid_key_chars_re = re.compile(b'[\x21-\x7e\x80-\xff]+$')
 
 
 #  Original author: Evan Martin of Danga Interactive
-__author__ = "Sean Reifschneider <jafo-memcached@tummy.com>"
-__version__ = "1.57"
+__author__ = "Sean Reifschneider <jafo00@gmail.com>"
+__version__ = "1.59.2"
 __copyright__ = "Copyright (C) 2003 Danga Interactive"
 #  http://en.wikipedia.org/wiki/Python_Software_Foundation_License
 __license__ = "Python Software Foundation License"
@@ -152,6 +140,7 @@ class Client(threading.local):
     _FLAG_INTEGER = 1 << 1
     _FLAG_LONG = 1 << 2
     _FLAG_COMPRESSED = 1 << 3
+    _FLAG_TEXT = 1 << 4
 
     _SERVER_RETRIES = 10  # how many times to try finding a free server.
 
@@ -386,12 +375,43 @@ class Client(threading.local):
             readline = s.readline
             while 1:
                 line = readline()
-                if not line or line.strip() == 'END':
+                if not line or line.decode('ascii').strip() == 'END':
                     break
-                stats = line.split(' ', 2)
+                stats = line.decode('ascii').split(' ', 2)
                 serverData[stats[1]] = stats[2]
 
-        return(data)
+        return data
+
+    def get_slab_stats(self):
+        data = []
+        for s in self.servers:
+            if not s.connect():
+                continue
+            if s.family == socket.AF_INET:
+                name = '%s:%s (%s)' % (s.ip, s.port, s.weight)
+            elif s.family == socket.AF_INET6:
+                name = '[%s]:%s (%s)' % (s.ip, s.port, s.weight)
+            else:
+                name = 'unix:%s (%s)' % (s.address, s.weight)
+            serverData = {}
+            data.append((name, serverData))
+            s.send_cmd('stats slabs')
+            readline = s.readline
+            while 1:
+                line = readline()
+                if not line or line.strip() == 'END':
+                    break
+                item = line.split(' ', 2)
+                if line.startswith('STAT active_slabs') or line.startswith('STAT total_malloced'):
+                    serverData[item[1]] = item[2]
+                else:
+                    # 0 = STAT, 1 = ITEM, 2 = Value
+                    slab = item[1].split(':', 2)
+                    # 0 = Slab #, 1 = Name
+                    if slab[0] not in serverData:
+                        serverData[slab[0]] = {}
+                    serverData[slab[0]][slab[1]] = item[2]
+        return data
 
     def get_slabs(self):
         data = []
@@ -473,7 +493,7 @@ class Client(threading.local):
         for s in self.servers:
             s.close_socket()
 
-    def delete_multi(self, keys, time=0, key_prefix='', noreply=False):
+    def delete_multi(self, keys, time=None, key_prefix='', noreply=False):
         """Delete multiple keys in the memcache doing just one query.
 
         >>> notset_keys = mc.set_multi({'a1' : 'val1', 'a2' : 'val2'})
@@ -547,7 +567,7 @@ class Client(threading.local):
                 rc = 0
         return rc
 
-    def delete(self, key, time=0, noreply=False):
+    def delete(self, key, time=None, noreply=False):
         '''Deletes a key from the memcache.
 
         @return: Nonzero on success.
@@ -583,7 +603,7 @@ class Client(threading.local):
         if not server:
             return 0
         self._statlog(cmd)
-        if time is not None and time != 0:
+        if time is not None:
             headers = str(time)
         else:
             headers = None
@@ -597,7 +617,7 @@ class Client(threading.local):
             if line and line.strip() in expected:
                 return 1
             self.debuglog('%s expected %s, got: %r'
-                          % (cmd, ' or '.join(expected), line))
+                          % (cmd, b' or '.join(expected), line))
         except socket.error as msg:
             if isinstance(msg, tuple):
                 msg = msg[1]
@@ -748,9 +768,9 @@ class Client(threading.local):
         routine. If the value being cached is a string, then the
         length of the string is measured, else if the value is an
         object, then the length of the pickle result is measured. If
-        the resulting attempt at compression yeilds a larger string
+        the resulting attempt at compression yields a larger string
         than the input, then it is discarded. For backwards
-        compatability, this parameter defaults to 0, indicating don't
+        compatibility, this parameter defaults to 0, indicating don't
         ever try to compress.
 
         @param noreply: optional parameter instructs the server to not
@@ -786,9 +806,9 @@ class Client(threading.local):
         routine. If the value being cached is a string, then the
         length of the string is measured, else if the value is an
         object, then the length of the pickle result is measured. If
-        the resulting attempt at compression yeilds a larger string
+        the resulting attempt at compression yields a larger string
         than the input, then it is discarded. For backwards
-        compatability, this parameter defaults to 0, indicating don't
+        compatibility, this parameter defaults to 0, indicating don't
         ever try to compress.
 
         @param noreply: optional parameter instructs the server to not
@@ -797,7 +817,9 @@ class Client(threading.local):
         return self._set("cas", key, val, time, min_compress_len, noreply)
 
     def _map_and_prefix_keys(self, key_iterable, key_prefix):
-        """Compute the mapping of server (_Host instance) -> list of keys to
+        """Map keys to the servers they will reside on.
+
+        Compute the mapping of server (_Host instance) -> list of keys to
         stuff onto that server, as well as the mapping of prefixed key
         -> original key.
         """
@@ -866,9 +888,9 @@ class Client(threading.local):
         '''Sets multiple keys in the memcache doing just one query.
 
         >>> notset_keys = mc.set_multi({'key1' : 'val1', 'key2' : 'val2'})
-        >>> mc.get_multi(['key1', 'key2']) == {'key1' : 'val1',
-        ...                                    'key2' : 'val2'}
-        1
+        >>> keys = mc.get_multi(['key1', 'key2'])
+        >>> keys == {'key1': 'val1', 'key2': 'val2'}
+        True
 
 
         This method is recommended over regular L{set} as it lowers
@@ -893,9 +915,8 @@ class Client(threading.local):
             ...     key_prefix='subspace_')
             >>> len(notset_keys) == 0
             True
-            >>> mc.get_multi(['subspace_key1',
-            ...               'subspace_key2']) == {'subspace_key1': 'val1',
-            ...                                     'subspace_key2' : 'val2'}
+            >>> keys = mc.get_multi(['subspace_key1', 'subspace_key2'])
+            >>> keys == {'subspace_key1': 'val1', 'subspace_key2': 'val2'}
             True
 
             Causes key 'subspace_key1' and 'subspace_key2' to be
@@ -909,9 +930,9 @@ class Client(threading.local):
             routine. If the value being cached is a string, then the
             length of the string is measured, else if the value is an
             object, then the length of the pickle result is
-            measured. If the resulting attempt at compression yeilds a
+            measured. If the resulting attempt at compression yields a
             larger string than the input, then it is discarded. For
-            backwards compatability, this parameter defaults to 0,
+            backwards compatibility, this parameter defaults to 0,
             indicating don't ever try to compress.
 
         @param noreply: optional parameter instructs the server to not
@@ -990,18 +1011,23 @@ class Client(threading.local):
         the new value itself.
         """
         flags = 0
-        if isinstance(val, six.binary_type):
+        # Check against the exact type, rather than using isinstance(), so that
+        # subclasses of native types (such as markup-safe strings) are pickled
+        # and restored as instances of the correct class.
+        val_type = type(val)
+        if val_type == six.binary_type:
             pass
-        elif isinstance(val, six.text_type):
+        elif val_type == six.text_type:
+            flags |= Client._FLAG_TEXT
             val = val.encode('utf-8')
-        elif isinstance(val, int):
+        elif val_type == int:
             flags |= Client._FLAG_INTEGER
             val = '%d' % val
             if six.PY3:
                 val = val.encode('ascii')
             # force no attempt to compress this silly string.
             min_compress_len = 0
-        elif six.PY2 and isinstance(val, long):
+        elif six.PY2 and isinstance(val, long):  # noqa: F821
             flags |= Client._FLAG_LONG
             val = str(val)
             if six.PY3:
@@ -1034,7 +1060,7 @@ class Client(threading.local):
         #  silently do not store if value length exceeds maximum
         if (self.server_max_value_length != 0 and
                 len(val) > self.server_max_value_length):
-            return(0)
+            return 0
 
         return (flags, len(val), val)
 
@@ -1055,7 +1081,7 @@ class Client(threading.local):
 
             store_info = self._val_to_store_info(val, min_compress_len)
             if not store_info:
-                return(0)
+                return 0
             flags, len_val, encoded_val = store_info
 
             if cmd == 'cas':
@@ -1070,8 +1096,7 @@ class Client(threading.local):
                 server.send_cmd(fullcmd)
                 if noreply:
                     return True
-                return(server.expect(b"STORED", raise_exception=True)
-                       == b"STORED")
+                return server.expect(b"STORED", raise_exception=True) == b"STORED"
             except socket.error as msg:
                 if isinstance(msg, tuple):
                     msg = msg[1]
@@ -1181,7 +1206,7 @@ class Client(threading.local):
         ...              key_prefix='pfx_') == {'k1' : 1, 'k2' : 2}
         1
 
-        get_mult [ and L{set_multi} ] can take str()-ables like ints /
+        get_multi [ and L{set_multi} ] can take str()-ables like ints /
         longs as keys too. Such as your db pri key fields.  They're
         rotored through str() before being passed off to memcache,
         with or without the use of a key_prefix.  In this mode, the
@@ -1213,7 +1238,7 @@ class Client(threading.local):
         prefix.
 
         @return: A dictionary of key/value pairs that were
-        available. If key_prefix was provided, the keys in the retured
+        available. If key_prefix was provided, the keys in the returned
         dictionary will not have it present.
         '''
 
@@ -1297,20 +1322,18 @@ class Client(threading.local):
         if flags & Client._FLAG_COMPRESSED:
             buf = self.decompressor(buf)
             flags &= ~Client._FLAG_COMPRESSED
-
         if flags == 0:
-            # Bare string
-            if six.PY3:
-                val = buf.decode('utf8')
-            else:
-                val = buf
+            # Bare bytes
+            val = buf
+        elif flags & Client._FLAG_TEXT:
+            val = buf.decode('utf-8')
         elif flags & Client._FLAG_INTEGER:
             val = int(buf)
         elif flags & Client._FLAG_LONG:
             if six.PY3:
                 val = int(buf)
             else:
-                val = long(buf)
+                val = long(buf)  # noqa: F821
         elif flags & Client._FLAG_PICKLE:
             try:
                 file = BytesIO(buf)

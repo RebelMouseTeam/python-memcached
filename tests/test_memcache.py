@@ -1,21 +1,13 @@
+# -*- coding: utf-8 -*-
 from __future__ import print_function
 
 import unittest
+import zlib
 
-import six
+import mock
 
-from memcache import Client, SERVER_MAX_KEY_LENGTH, SERVER_MAX_VALUE_LENGTH
-
-try:
-    _str_cls = basestring
-except NameError:
-    _str_cls = str
-
-
-def to_s(val):
-    if not isinstance(val, _str_cls):
-        return "%s (%s)" % (val, type(val))
-    return "%s" % val
+from memcache import Client, _Host, SERVER_MAX_KEY_LENGTH, SERVER_MAX_VALUE_LENGTH  # noqa: H301
+from .utils import captured_stderr
 
 
 class FooStruct(object):
@@ -34,11 +26,12 @@ class FooStruct(object):
 
 class TestMemcache(unittest.TestCase):
     def setUp(self):
-        # TODO: unix socket server stuff
+        # TODO(): unix socket server stuff
         servers = ["127.0.0.1:11211"]
         self.mc = Client(servers, debug=1)
 
     def tearDown(self):
+        self.mc.flush_all()
         self.mc.disconnect_all()
 
     def check_setget(self, key, val, noreply=False):
@@ -57,6 +50,13 @@ class TestMemcache(unittest.TestCase):
         result = self.mc.delete("long")
         self.assertEqual(result, True)
         self.assertEqual(self.mc.get("long"), None)
+
+    @mock.patch.object(_Host, 'send_cmd')
+    @mock.patch.object(_Host, 'readline')
+    def test_touch(self, mock_readline, mock_send_cmd):
+        with captured_stderr():
+            self.mc.touch('key')
+        mock_send_cmd.assert_called_with(b'touch key 0')
 
     def test_get_multi(self):
         self.check_setget("gm_a_string", "some random string")
@@ -129,13 +129,39 @@ class TestMemcache(unittest.TestCase):
         self.check_setget("bool", True)
 
     def test_unicode_key(self):
-        s = six.u('\u4f1a')
+        s = u'\u4f1a'
         maxlen = SERVER_MAX_KEY_LENGTH // len(s.encode('utf-8'))
         key = s * maxlen
 
         self.mc.set(key, 5)
         value = self.mc.get(key)
         self.assertEqual(value, 5)
+
+    def test_unicode_value(self):
+        key = 'key'
+        value = u'Iñtërnâtiônàlizætiøn2'
+        self.mc.set(key, value)
+        cached_value = self.mc.get(key)
+        self.assertEqual(value, cached_value)
+
+    def test_binary_string(self):
+        value = 'value_to_be_compressed'
+        compressed_value = zlib.compress(value.encode())
+
+        self.mc.set('binary1', compressed_value)
+        compressed_result = self.mc.get('binary1')
+        self.assertEqual(compressed_value, compressed_result)
+        self.assertEqual(value, zlib.decompress(compressed_result).decode())
+
+        self.mc.add('binary1-add', compressed_value)
+        compressed_result = self.mc.get('binary1-add')
+        self.assertEqual(compressed_value, compressed_result)
+        self.assertEqual(value, zlib.decompress(compressed_result).decode())
+
+        self.mc.set_multi({'binary1-set_many': compressed_value})
+        compressed_result = self.mc.get('binary1-set_many')
+        self.assertEqual(compressed_value, compressed_result)
+        self.assertEqual(value, zlib.decompress(compressed_result).decode())
 
     def test_ignore_too_large_value(self):
         # NOTE: "MemCached: while expecting[...]" is normal...
@@ -146,7 +172,13 @@ class TestMemcache(unittest.TestCase):
         self.assertEqual(self.mc.get(key), value)
 
         value = 'a' * SERVER_MAX_VALUE_LENGTH
-        self.assertFalse(self.mc.set(key, value))
+        with captured_stderr() as log:
+            self.assertIs(self.mc.set(key, value), False)
+        self.assertEqual(
+            log.getvalue(),
+            "MemCached: while expecting 'STORED', got unexpected response "
+            "'SERVER_ERROR object too large for cache'\n"
+        )
         # This test fails if the -I option is used on the memcached server
         self.assertTrue(self.mc.get(key) is None)
 
@@ -166,16 +198,38 @@ class TestMemcache(unittest.TestCase):
         """Testing set_multi() with no memcacheds running."""
 
         self.mc.disconnect_all()
-        for server in self.mc.servers:
-            server.mark_dead('test')
+        with captured_stderr() as log:
+            for server in self.mc.servers:
+                server.mark_dead('test')
+        self.assertIn('Marking dead.', log.getvalue())
         errors = self.mc.set_multi({'key1': 'a', 'key2': 'b'})
         self.assertEqual(sorted(errors), ['key1', 'key2'])
 
     def test_disconnect_all_delete_multi(self):
         """Testing delete_multi() with no memcacheds running."""
         self.mc.disconnect_all()
-        ret = self.mc.delete_multi({'keyhere': 'a', 'keythere': 'b'})
+        with captured_stderr() as output:
+            ret = self.mc.delete_multi(('keyhere', 'keythere'))
         self.assertEqual(ret, 1)
+        self.assertEqual(
+            output.getvalue(),
+            "MemCached: while expecting 'DELETED', got unexpected response "
+            "'NOT_FOUND'\n"
+            "MemCached: while expecting 'DELETED', got unexpected response "
+            "'NOT_FOUND'\n"
+        )
+
+    @mock.patch.object(_Host, 'send_cmd')  # Don't send any commands.
+    @mock.patch.object(_Host, 'readline')
+    def test_touch_unexpected_reply(self, mock_readline, mock_send_cmd):
+        """touch() logs an error upon receiving an unexpected reply."""
+        mock_readline.return_value = 'SET'  # the unexpected reply
+        with captured_stderr() as output:
+            self.mc.touch('key')
+        self.assertEqual(
+            output.getvalue(),
+            "MemCached: touch expected %s, got: 'SET'\n" % b'TOUCHED'
+        )
 
     def test_tags_set(self):
         self.mc.disconnect_all()
